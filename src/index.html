@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Chat</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    #notificationBell {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      font-size: 24px;
+      cursor: pointer;
+    }
+    
+    #notificationCount {
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      background: red;
+      color: white;
+      border-radius: 50%;
+      padding: 2px 6px;
+      font-size: 14px;
+    }
+
+    #notificationList {
+      display: none;
+      position: absolute;
+      top: 40px;
+      right: 10px;
+      width: 300px;
+      border: 1px solid #ccc;
+      background-color: white;
+      box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+    }
+
+    #notificationList ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    #notificationList ul li {
+      padding: 10px;
+      border-bottom: 1px solid #ccc;
+    }
+
+    #notificationList ul li:last-child {
+      border-bottom: none;
+    }
+
+    #notificationList ul li button {
+      margin-left: 10px;
+    }
+  </style>
+  <script>
+    document.addEventListener('DOMContentLoaded', (event) => {
+      const socket = io();
+      let notificationCount = 0;
+      const notifications = [];
+
+      // Solicitar permissão para notificações
+      function requestNotificationPermission() {
+        if ("Notification" in window) {
+          Notification.requestPermission().then(permission => {
+            if (permission === "granted") {
+              console.log("Notificações permitidas");
+            }
+          });
+        }
+      }
+
+      // Enviar notificação
+      function sendNotification(title, message) {
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification(title, { body: message });
+        }
+      }
+
+      // Atualizar contagem de notificações
+      function updateNotificationCount() {
+        const notificationCountElement = document.getElementById('notificationCount');
+        notificationCountElement.innerText = notificationCount;
+        notificationCountElement.style.display = notificationCount > 0 ? 'block' : 'none';
+      }
+
+      // Atualizar lista de notificações
+      function updateNotificationList() {
+        const notificationListElement = document.getElementById('notificationList');
+        const ul = notificationListElement.querySelector('ul');
+        ul.innerHTML = '';
+        notifications.forEach((notification, index) => {
+          const li = document.createElement('li');
+          li.innerText = notification.message;
+          const button = document.createElement('button');
+          button.innerText = 'OK';
+          button.addEventListener('click', () => {
+            notifications.splice(index, 1);
+            notificationCount--;
+            updateNotificationCount();
+            updateNotificationList();
+          });
+          li.appendChild(button);
+          ul.appendChild(li);
+        });
+      }
+
+      document.getElementById('notificationBell').addEventListener('click', () => {
+        const notificationListElement = document.getElementById('notificationList');
+        notificationListElement.style.display = notificationListElement.style.display === 'none' ? 'block' : 'none';
+      });
+
+      document.getElementById('loginForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const userName = document.getElementById('userName').value;
+        socket.emit('login', userName);
+      });
+
+      socket.on('loginSuccess', (user) => {
+        document.getElementById('loginStatus').innerText = `Logged in as ${user.name}`;
+        requestNotificationPermission(); // Solicitar permissão ao fazer login
+      });
+
+      socket.on('loginError', (error) => {
+        document.getElementById('loginStatus').innerText = `Error: ${error}`;
+      });
+
+      document.getElementById('messageForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const msg = document.getElementById('message').value;
+        const toUser = document.getElementById('toUser').value;
+        socket.emit('message', { msg, toUserName: toUser });
+      });
+
+      socket.on('message', (data) => {
+        const messages = document.getElementById('messages');
+        const messageItem = document.createElement('li');
+        messageItem.innerText = `From ${data.from}: ${data.msg}`;
+        messages.appendChild(messageItem);
+
+        // Enviar notificação de nova mensagem
+        sendNotification('Nova Mensagem', `De ${data.from}: ${data.msg}`);
+      });
+
+      socket.on('messageError', (error) => {
+        const messages = document.getElementById('messages');
+        const messageItem = document.createElement('li');
+        messageItem.innerText = `Error: ${error}`;
+        messages.appendChild(messageItem);
+      });
+
+      // Enviar solicitação de tarefa
+      document.getElementById('taskForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const task = document.getElementById('task').value;
+        const toUser = document.getElementById('taskToUser').value;
+        socket.emit('taskRequest', { task, toUserName: toUser });
+      });
+
+      // Receber notificação de nova tarefa
+      socket.on('taskNotification', (task) => {
+        notificationCount++;
+        notifications.push({ message: `Nova tarefa de ${task.from}: ${task.task}` });
+        updateNotificationCount();
+        updateNotificationList();
+
+        const tasks = document.getElementById('taskList');
+        const taskItem = document.createElement('li');
+        taskItem.innerHTML = `
+          Nova tarefa de ${task.from}: ${task.task} 
+          <button onclick="acceptTask('${task.task}')">Aceitar</button>
+          <button onclick="rejectTask('${task.task}')">Rejeitar</button>
+        `;
+        tasks.appendChild(taskItem);
+
+        // Enviar notificação de nova tarefa
+        sendNotification('Nova Tarefa', `De ${task.from}: ${task.task}`);
+      });
+
+      // Responder a uma tarefa
+      window.acceptTask = (task) => {
+        socket.emit('taskResponse', { task, status: 'accepted' });
+      }
+
+      window.rejectTask = (task) => {
+        socket.emit('taskResponse', { task, status: 'rejected' });
+      }
+
+      socket.on('taskResponse', (data) => {
+        const tasks = document.getElementById('taskList');
+        const taskItem = document.createElement('li');
+        taskItem.innerText = `Tarefa ${data.task} foi ${data.status} por ${data.from}`;
+        tasks.appendChild(taskItem);
+
+        // Notificação de resposta da tarefa
+        notificationCount++;
+        notifications.push({ message: `Tarefa ${data.task} foi ${data.status} por ${data.from}` });
+        updateNotificationCount();
+        updateNotificationList();
+
+        // Enviar notificação de resposta da tarefa
+        sendNotification('Resposta da Tarefa', `Tarefa ${data.task} foi ${data.status} por ${data.from}`);
+      });
+    });
+  </script>
+</head>
+<body>
+  <div id="notificationBell">
+    🔔
+    <span id="notificationCount" style="display:none;">0</span>
+    <div id="notificationList">
+      <ul></ul>
+    </div>
+  </div>
+  <h1>Chat</h1>
+  <div id="login">
+    <form id="loginForm">
+      <input type="text" id="userName" placeholder="Enter your username" required />
+      <button type="submit">Login</button>
+    </form>
+    <div id="loginStatus"></div>
+  </div>
+  <div id="chat">
+    <form id="messageForm">
+      <input type="text" id="message" placeholder="Enter your message" required />
+      <input type="text" id="toUser" placeholder="Enter recipient's username" required />
+      <button type="submit">Send</button>
+    </form>
+    <ul id="messages"></ul>
+  </div>
+  <div id="tasks">
+    <h2>Solicitações de Tarefas</h2>
+    <form id="taskForm">
+      <input type="text" id="task" placeholder="Digite a tarefa" required />
+      <input type="text" id="taskToUser" placeholder="Digite o nome do destinatário" required />
+      <button type="submit">Enviar Tarefa</button>
+    </form>
+    <ul id="taskList"></ul>
+  </div>
+</body>
+</html>
